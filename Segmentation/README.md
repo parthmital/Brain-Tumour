@@ -61,7 +61,7 @@ The model uses a hybrid loss combining:
 - **Learning Rate Schedule**: Polynomial decay with power 0.9
 - **Mixed Precision Training**: Automatic mixed precision for memory efficiency
 - **Batch Size**: 12 patches per batch
-- **Training Duration**: 4 epochs with comprehensive validation
+- **Training Duration**: 2 epochs with comprehensive validation
 
 ## Performance Metrics
 
@@ -69,14 +69,14 @@ The model achieves competitive segmentation performance measured by Dice scores:
 
 ### Validation Results
 
-- **Whole Tumour (WT)**: 0.854 Dice score
-- **Tumour Core (TC)**: 0.691 Dice score
-- **Enhancing Tumour (ET)**: 0.666 Dice score
+- **Whole Tumour (WT)**: 0.847 Dice score
+- **Tumour Core (TC)**: 0.753 Dice score
+- **Enhancing Tumour (ET)**: 0.761 Dice score
 
 ### Training Characteristics
 
 - **Convergence**: Stable loss reduction across epochs
-- **Efficiency**: ~850 seconds per epoch with GPU acceleration
+- **Efficiency**: ~700 seconds per epoch with GPU acceleration
 - **Memory Optimization**: 10.2 MB model size with mixed precision
 
 ## Technical Implementation
