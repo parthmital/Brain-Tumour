@@ -2,7 +2,7 @@
 
 A deep learning project for binary classification of brain tumors using MRI scans with ResNet50 architecture and advanced data augmentation techniques.
 
-## 🧠 Overview
+## Overview
 
 This project implements a sophisticated brain tumor detection system using transfer learning with ResNet50. The model is trained to classify MRI brain scans as either containing tumors (positive) or not containing tumors (negative), achieving high accuracy through advanced preprocessing and multi-GPU training strategies.
 
@@ -14,7 +14,7 @@ This project implements a sophisticated brain tumor detection system using trans
 - **Transfer Learning**: ResNet50 with selective layer unfreezing (conv4+ layers) for optimal feature extraction
 - **Comprehensive Evaluation**: Accuracy and AUC metrics with early stopping and learning rate scheduling
 
-## 📊 Dataset
+## Dataset
 
 The model is trained on three different brain MRI datasets to ensure comprehensive coverage and generalization:
 
@@ -24,7 +24,7 @@ The model is trained on three different brain MRI datasets to ensure comprehensi
 
 This multi-dataset approach provides diverse imaging conditions and tumor presentations, improving the model's ability to generalize across different medical imaging protocols and equipment.
 
-## 🛠️ Technical Implementation
+## Technical Implementation
 
 ### Architecture
 
@@ -59,7 +59,7 @@ A sophisticated preprocessing pipeline ensures optimal input quality for the mod
 4. **Intensity Augmentation**: Brightness variation (0.7-1.3) to simulate different imaging conditions
 5. **Flipping**: Both horizontal and vertical flips to increase dataset diversity and model robustness
 
-## 🚀 Performance
+## Performance
 
 ### Final Test Results
 
@@ -73,7 +73,7 @@ The trained model demonstrates strong performance on the independent test datase
 
 The model achieved rapid convergence with validation AUC reaching >99% by epoch 6, demonstrating the effectiveness of the transfer learning approach and comprehensive augmentation strategies. The training process utilized dual GPU setup, completing each epoch in approximately 55 seconds with 30 steps per epoch.
 
-## 🔬 Research Context
+## Research Context
 
 This implementation incorporates insights from recent research papers in medical imaging and deep learning:
 
@@ -82,7 +82,7 @@ This implementation incorporates insights from recent research papers in medical
 
 The project builds upon established methodologies while introducing novel combinations of augmentation techniques and transfer learning strategies specifically optimized for brain tumor detection tasks.
 
-## 🧪 Model Architecture Details
+## Model Architecture Details
 
 ### Transfer Learning Strategy
 
@@ -100,7 +100,7 @@ The training process incorporates sophisticated monitoring and optimization tech
 - **ReduceLROnPlateau**: Automatically reduces learning rate by factor of 0.2 when validation AUC plateaus, enabling fine-tuning
 - **Multi-GPU Optimization**: Utilizes MirroredStrategy for efficient distributed training across available GPUs
 
-## 📈 Key Insights
+## Key Insights
 
 ### Data Augmentation Impact
 
@@ -114,7 +114,7 @@ Selective layer unfreezing allowed the model to leverage powerful pre-trained fe
 
 Training on multiple diverse datasets improved the model's ability to handle variations in imaging equipment, protocols, and patient populations, enhancing real-world applicability.
 
-## 🎯 Applications
+## Applications
 
 This brain tumor detection system has potential applications in:
 

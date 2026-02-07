@@ -1,2 +1,4 @@
 *.pth
 *.keras
+*.h5
+*.json
