@@ -4,7 +4,7 @@ import uuid
 import uvicorn
 import numpy as np
 from typing import List, Dict, Optional
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlmodel import Session, select
@@ -79,28 +79,6 @@ async def lifespan(app: FastAPI):
     print("Initializing database...")
     create_db_and_tables()
 
-    # Seeding: Create a default test user if needed, but leave scans empty as requested
-    with next(get_session()) as session:
-        # Check if default user exists
-        default_user = session.exec(
-            select(User).where(User.username == "drrebecca")
-        ).first()
-        if not default_user:
-            print("Creating default test user...")
-            hashed_pass = get_password_hash("password123")
-            user = User(
-                username="drrebecca",
-                email="r.torres@hospital.org",
-                hashed_password=hashed_pass,
-                fullName="Dr. Rebecca Torres",
-                title="Neuroradiology",
-                department="Neuroradiology",
-                institution="Central Medical Centre",
-            )
-            session.add(user)
-            session.commit()
-            print("Default user 'drrebecca' created with password 'password123'")
-
     # Load AI models
     print("Loading AI models...")
     try:
@@ -136,6 +114,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+from pydantic import BaseModel
+
+
+class UserUpdate(BaseModel):
+    fullName: Optional[str] = None
+    email: Optional[str] = None
+    title: Optional[str] = None
+    department: Optional[str] = None
+    institution: Optional[str] = None
 
 
 # Auth Endpoints
@@ -194,6 +183,37 @@ async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
+@app.put("/api/auth/me")
+async def update_me(
+    user_update: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    if user_update.fullName is not None:
+        current_user.fullName = user_update.fullName
+    if user_update.email is not None:
+        # Check if email is already taken by ANOTHER user
+        existing = session.exec(
+            select(User)
+            .where(User.email == user_update.email)
+            .where(User.id != current_user.id)
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already in use")
+        current_user.email = user_update.email
+    if user_update.title is not None:
+        current_user.title = user_update.title
+    if user_update.department is not None:
+        current_user.department = user_update.department
+    if user_update.institution is not None:
+        current_user.institution = user_update.institution
+
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    return current_user
+
+
 @app.get("/api/scans")
 async def get_scans(
     session: Session = Depends(get_session),
@@ -219,9 +239,14 @@ async def get_scan(
 @app.post("/api/process-mri")
 async def process_mri(
     files: List[UploadFile] = File(...),
+    patientName: str = Form("Uploaded Scan"),
+    patientId: str = Form(None),
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
+    if not patientId:
+        patientId = f"PT-2026-{uuid.uuid4().hex[:4].upper()}"
+
     if processor.detection_model is None or processor.classification_model is None:
         raise HTTPException(status_code=503, detail="AI models not loaded.")
 
@@ -272,13 +297,14 @@ async def process_mri(
         # Save to DB
         new_scan = Scan(
             id=f"scan-{uuid.uuid4().hex[:6]}",
-            patientId=f"PT-2026-{uuid.uuid4().hex[:4].upper()}",
-            patientName="Uploaded Scan",
-            scanDate="2026-02-08",
+            patientId=patientId,
+            patientName=patientName,
+            scanDate=datetime.now().strftime("%Y-%m-%d"),
             modalities=[m.upper() for m in saved_files.keys()],
             status="completed",
             progress=100,
             pipelineStep="complete",
+            userId=current_user.id,
             results={
                 "detected": has_tumor,
                 "classification": (
