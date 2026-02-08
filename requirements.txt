@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+tensorflow
+torch
+torchvision
+opencv-python-headless
+nibabel
+scikit-image
+numpy
+pydantic
+sqlmodel
