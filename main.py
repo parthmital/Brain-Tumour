@@ -27,7 +27,7 @@ from database import create_db_and_tables, get_session
 from models import Scan, User, UserCreate, UserLogin, ScanUpdate
 import io
 
-UPLOAD_DIR = os.path.join(os.getcwd(), "uploads")
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Auth Configuration
@@ -305,7 +305,8 @@ async def process_mri(
         seg_result = {"tumorVolume": 0, "wtVolume": 0, "tcVolume": 0, "etVolume": 0}
         if len(saved_files) >= 4:
             try:
-                seg_result = processor.run_segmentation(saved_files)
+                seg_path = os.path.join(scan_dir, "segmentation.nii.gz")
+                seg_result = processor.run_segmentation(saved_files, save_path=seg_path)
             except Exception as seg_err:
                 print(f"Segmentation error: {seg_err}")
 
@@ -386,6 +387,37 @@ async def get_scan_slice(
         media_type="image/jpeg",
         headers={"X-Total-Slices": str(total_slices)},
     )
+
+
+@app.get("/api/scans/{scan_id}/segmentation/{slice_idx}")
+async def get_segmentation_slice(
+    scan_id: str,
+    slice_idx: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    scan = session.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    seg_path = os.path.join(UPLOAD_DIR, scan_id, "segmentation.nii.gz")
+    if not os.path.exists(seg_path):
+        # Return empty image or 404?
+        # Better to return 404 so frontend knows no mask exists
+        raise HTTPException(status_code=404, detail="Segmentation not found")
+
+    mask = processor.get_segmentation_slice(seg_path, slice_idx)
+
+    if mask is None:
+        raise HTTPException(status_code=500, detail="Failed to extract mask slice")
+
+    # mask is (H, W, 3) uint8 (R=WT, G=TC, B=ET)
+    # Encode as PNG to preserve values
+    # cv2 expects BGR
+    mask_bgr = cv2.cvtColor(mask, cv2.COLOR_RGB2BGR)
+
+    _, buffer = cv2.imencode(".png", mask_bgr)
+    return Response(content=buffer.tobytes(), media_type="image/png")
 
 
 @app.put("/api/scans/{scan_id}", response_model=Scan)

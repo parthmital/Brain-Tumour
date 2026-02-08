@@ -304,7 +304,9 @@ class BrainProcessor:
         cropped[d_dst, h_dst, w_dst] = data[d_src, h_src, w_src]
         return cropped
 
-    def run_segmentation(self, modality_paths: Dict[str, str]) -> Dict[str, float]:
+    def run_segmentation(
+        self, modality_paths: Dict[str, str], save_path: Optional[str] = None
+    ) -> Dict[str, float]:
         if self.segmentation_model is None:
             return {"tumorVolume": 0, "wtVolume": 0, "tcVolume": 0, "etVolume": 0}
 
@@ -322,9 +324,50 @@ class BrainProcessor:
 
             probs = torch.sigmoid(output).cpu().numpy()[0]
 
+            # Prepare volume metrics
             wt_vol = np.sum(probs[0] > 0.5) / 1000.0
             tc_vol = np.sum(probs[1] > 0.5) / 1000.0
             et_vol = np.sum(probs[2] > 0.5) / 1000.0
+
+            if save_path:
+                try:
+                    # Load reference for shape and affine
+                    ref_img = nib.load(modality_paths["flair"])
+                    d, h, w = ref_img.shape
+                    affine = ref_img.affine
+
+                    # Restore full volume
+                    full_mask = np.zeros((3, d, h, w), dtype=np.float32)
+
+                    start_d, start_h, start_w = (
+                        (d - 128) // 2,
+                        (h - 128) // 2,
+                        (w - 128) // 2,
+                    )
+
+                    # Determine crop regions (same as preprocess)
+                    d_dst = slice(max(0, start_d), min(d, start_d + 128))
+                    h_dst = slice(max(0, start_h), min(h, start_h + 128))
+                    w_dst = slice(max(0, start_w), min(w, start_w + 128))
+
+                    d_src = slice(max(0, -start_d), min(128, d - start_d))
+                    h_src = slice(max(0, -start_h), min(128, h - start_h))
+                    w_src = slice(max(0, -start_w), min(128, w - start_w))
+
+                    # Place prediction back into full volume
+                    # probs is (3, 128, 128, 128)
+                    full_mask[:, d_dst, h_dst, w_dst] = probs[:, d_src, h_src, w_src]
+
+                    # Save as NIfTI
+                    # We save as (D, H, W, 3) for easier viewing in some tools, or keep (3, D, H, W)
+                    # Standard NIfTI is usually (D, H, W, Channels) or just (D, H, W) for labels
+                    # Let's save as (D, H, W, 3) to be compatible with standard 4D viewing
+                    full_mask_reshaped = np.moveaxis(full_mask, 0, -1)  # (D, H, W, 3)
+                    nib.save(nib.Nifti1Image(full_mask_reshaped, affine), save_path)
+                    print(f"Segmentation mask saved to {save_path}")
+                except Exception as e:
+                    print(f"Failed to save segmentation mask: {e}")
+                    traceback.print_exc()
 
             return {
                 "tumorVolume": float(wt_vol),
@@ -332,3 +375,61 @@ class BrainProcessor:
                 "tcVolume": float(tc_vol),
                 "etVolume": float(et_vol),
             }
+
+    def get_segmentation_slice(self, path: str, slice_idx: int):
+        """Extract segmentation mask slice. Returns (H, W, 3) array with probabilities."""
+        try:
+            if not os.path.exists(path):
+                return None
+
+            proxy = nib.load(path)
+            # Shape is expected to be (D, H, W, 3)
+            # Check dimensions
+            if len(proxy.shape) != 4 or proxy.shape[3] != 3:
+                print(f"Unexpected mask shape: {proxy.shape}")
+                return None
+
+            # Extract slice
+            # Assuming D is the slice axis (axis 0 in shape, but dependent on orientation)
+            # In run_segmentation we did: d, h, w = ref_img.shape.
+            # And we saved as (d, h, w, 3).
+            # So slice_idx should index into axis 0?
+            # Wait, get_slice_as_image usually handles axis 2 as slice index for standard anatomical view (Axial).
+            # Let's check get_slice_as_image again.
+            # It uses `slice_data = proxy.dataobj[:, :, slice_idx]`
+            # So standard view expects (H, W, D).
+            # However, my run_segmentation logic used d, h, w from nib.load().shape
+            # If nib.load().shape returns (H, W, D), then my d,h,w were actually H,W,D.
+            # Let's be careful.
+            # BraTS data often comes as (H, W, D, modalities).
+            # If `nib.load(path).shape` is (240, 240, 155), then D=155 is at index 2.
+            # So my variables d, h, w in run_segmentation effectively mapped to shape[0], shape[1], shape[2].
+            # If shape is (H, W, D), then d=H, h=W, w=D.
+            # And I did (d-128)//2.
+            # This means I cropped centrally in H, W, D.
+            # And I saved as (d, h, w, 3) -> (H, W, D, 3).
+            # So to get the same slice as `get_slice_as_image`, I should index axis 2.
+
+            # Verify shape
+            # We want [:, :, slice_idx, :]
+            slice_data = proxy.dataobj[:, :, slice_idx, :]  # (H, W, 3)
+            slice_data = np.array(slice_data)
+
+            # Rotate to match image rotation in get_slice_as_image
+            # get_slice_as_image rotates constant 90 counter-clockwise
+            # slice_data is (H, W, 3)
+            # We need to rotate each channel?
+            # cv2.rotate works on 2D arrays.
+            # We can use np.rot90
+            # cv2.ROTATE_90_COUNTERCLOCKWISE is equivalent to np.rot90(img, 1)
+            slice_data = np.rot90(slice_data, 1, axes=(0, 1))
+
+            # Values are 0-1 probabilities.
+            # Return as is (float) or scale?
+            # Frontend might expect byte.
+            # Let's return as uint8 0-255 for easy image transfer
+            return (slice_data * 255).astype(np.uint8)
+
+        except Exception as e:
+            print(f"Error in get_segmentation_slice: {e}")
+            return None
