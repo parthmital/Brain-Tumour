@@ -215,6 +215,51 @@ class BrainProcessor:
         # Convert to BGR for cv2 consistency
         return cv2.cvtColor(slice_data, cv2.COLOR_GRAY2BGR)
 
+    def get_slice_as_image(self, path: str, slice_idx: int):
+        """Extract a specific slice from a NIfTI file and return as BGR image."""
+        try:
+            proxy = nib.load(path)
+            # Use dataobj to avoid loading full file if possible, though for shape we need header
+            data_shape = proxy.shape
+
+            # Handle 3D or 4D data
+            if len(data_shape) == 4:
+                # Assuming 4th dim is time/modality, take first
+                num_slices = data_shape[2]
+                slice_data = proxy.dataobj[:, :, slice_idx, 0]
+            elif len(data_shape) == 3:
+                num_slices = data_shape[2]
+                slice_data = proxy.dataobj[:, :, slice_idx]
+            else:
+                return None, 1  # Fallback for unknown shapes
+
+            # Ensure we have a numpy array
+            slice_data = np.array(slice_data)
+
+            # Normalize using robust range (ignoring outliers)
+            s_min = np.min(slice_data)
+            s_max = np.percentile(
+                slice_data, 99.5
+            )  # Use 99.5th percentile to avoid hot pixels
+
+            if s_max > s_min:
+                # Clip values above s_max
+                slice_data = np.clip(slice_data, s_min, s_max)
+                # Normalize to 0-255
+                slice_data = (slice_data - s_min) / (s_max - s_min) * 255
+            else:
+                slice_data = np.zeros_like(slice_data)
+
+            slice_data = slice_data.astype(np.uint8)
+
+            # Rotate 90 degrees if needed (standard medical files often need rotation for viewing)
+            slice_data = cv2.rotate(slice_data, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+            return cv2.cvtColor(slice_data, cv2.COLOR_GRAY2BGR), num_slices
+        except Exception as e:
+            print(f"Error in get_slice_as_image: {e}")
+            return None, 0
+
     def run_detection(self, image_data: np.ndarray) -> float:
         if self.detection_model is None:
             raise ValueError("Detection model not loaded")

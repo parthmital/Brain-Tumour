@@ -36,6 +36,7 @@ class Scan(SQLModel, table=True):
     patientName: str
     scanDate: str
     modalities: List[str] = Field(sa_column=Column(JSON))
+    filePaths: Optional[Dict[str, str]] = Field(default=None, sa_column=Column(JSON))
     status: str
     progress: int = Field(default=0)
     pipelineStep: str = Field(default="queued")
@@ -47,3 +48,8 @@ class Scan(SQLModel, table=True):
 class ScanCreate(SQLModel):
     patientName: str = "Uploaded Scan"
     modalities: List[str]
+
+
+class ScanUpdate(SQLModel):
+    patientName: Optional[str] = None
+    patientId: Optional[str] = None

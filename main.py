@@ -2,9 +2,19 @@ import os
 import shutil
 import uuid
 import uvicorn
+import cv2
 import numpy as np
 from typing import List, Dict, Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Body
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    File,
+    Form,
+    HTTPException,
+    Depends,
+    Body,
+    Response,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlmodel import Session, select
@@ -14,7 +24,11 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import bcrypt
 from processor import BrainProcessor
 from database import create_db_and_tables, get_session
-from models import Scan, User, UserCreate, UserLogin
+from models import Scan, User, UserCreate, UserLogin, ScanUpdate
+import io
+
+UPLOAD_DIR = os.path.join(os.getcwd(), "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Auth Configuration
 SECRET_KEY = "neuroscan-secret-key-change-this-in-production"
@@ -250,13 +264,14 @@ async def process_mri(
     if processor.detection_model is None or processor.classification_model is None:
         raise HTTPException(status_code=503, detail="AI models not loaded.")
 
-    temp_dir = os.path.join(os.getcwd(), f"temp_process_{uuid.uuid4().hex}")
-    os.makedirs(temp_dir, exist_ok=True)
+    scan_id = f"scan-{uuid.uuid4().hex[:6]}"
+    scan_dir = os.path.join(UPLOAD_DIR, scan_id)
+    os.makedirs(scan_dir, exist_ok=True)
 
     saved_files = {}
     try:
         for file in files:
-            file_path = os.path.join(temp_dir, file.filename)
+            file_path = os.path.join(scan_dir, file.filename)
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
 
@@ -296,11 +311,15 @@ async def process_mri(
 
         # Save to DB
         new_scan = Scan(
-            id=f"scan-{uuid.uuid4().hex[:6]}",
+            id=scan_id,
             patientId=patientId,
             patientName=patientName,
             scanDate=datetime.now().strftime("%Y-%m-%d"),
             modalities=[m.upper() for m in saved_files.keys()],
+            # Store relative paths to the files
+            filePaths={
+                m: os.path.relpath(p, UPLOAD_DIR) for m, p in saved_files.items()
+            },
             status="completed",
             progress=100,
             pipelineStep="complete",
@@ -329,9 +348,85 @@ async def process_mri(
         import traceback
 
         traceback.print_exc()
+        # Clean up on failure
+        if os.path.exists(scan_dir):
+            shutil.rmtree(scan_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@app.get("/api/scans/{scan_id}/slice/{slice_idx}")
+async def get_scan_slice(
+    scan_id: str,
+    slice_idx: int,
+    modality: str = "flair",
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    scan = session.get(Scan, scan_id)
+    if not scan or not scan.filePaths:
+        raise HTTPException(status_code=404, detail="Scan or files not found")
+
+    modality = modality.lower()
+    if modality not in scan.filePaths:
+        # Fallback to first available modality
+        modality = list(scan.filePaths.keys())[0]
+
+    file_path = os.path.join(UPLOAD_DIR, scan.filePaths[modality])
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="MRI file not found on disk")
+
+    image, total_slices = processor.get_slice_as_image(file_path, slice_idx)
+    if image is None:
+        raise HTTPException(status_code=500, detail="Failed to extract slice")
+
+    # Encode as JPEG
+    _, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    return Response(
+        content=buffer.tobytes(),
+        media_type="image/jpeg",
+        headers={"X-Total-Slices": str(total_slices)},
+    )
+
+
+@app.put("/api/scans/{scan_id}", response_model=Scan)
+async def update_scan(
+    scan_id: str,
+    scan_update: ScanUpdate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    scan = session.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    scan_data = scan_update.dict(exclude_unset=True)
+    for key, value in scan_data.items():
+        setattr(scan, key, value)
+
+    session.add(scan)
+    session.commit()
+    session.refresh(scan)
+    return scan
+
+
+@app.delete("/api/scans/{scan_id}")
+async def delete_scan(
+    scan_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    scan = session.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Delete files
+    scan_dir = os.path.join(UPLOAD_DIR, scan_id)
+    if os.path.exists(scan_dir):
+        shutil.rmtree(scan_dir, ignore_errors=True)
+
+    session.delete(scan)
+    session.commit()
+    return {"message": "Scan deleted successfully"}
 
 
 if __name__ == "__main__":
