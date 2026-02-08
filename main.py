@@ -29,12 +29,9 @@ import io
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-# Auth Configuration
 SECRET_KEY = "neuroscan-secret-key-change-this-in-production"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 
 
@@ -76,24 +73,19 @@ async def get_current_user(
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-
     user = session.exec(select(User).where(User.username == username)).first()
     if user is None:
         raise credentials_exception
     return user
 
 
-# Initialize models
 processor = BrainProcessor()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Setup database
     print("Initializing database...")
     create_db_and_tables()
-
-    # Load AI models
     print("Loading AI models...")
     try:
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -106,7 +98,6 @@ async def lifespan(app: FastAPI):
         segmentation_path = os.path.join(
             base_dir, "Segmentation", "BraTS2020_nnU_Net_Segmentation.pth"
         )
-
         processor.load_models(
             detection_path=detection_path,
             classification_path=classification_path,
@@ -115,21 +106,14 @@ async def lifespan(app: FastAPI):
         print("All models loaded successfully")
     except Exception as e:
         print(f"CRITICAL: Could not load models. Error: {e}")
-
     yield
     print("Shutting down...")
 
 
 app = FastAPI(lifespan=lifespan)
-
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
-
-
 from pydantic import BaseModel
 
 
@@ -141,16 +125,13 @@ class UserUpdate(BaseModel):
     institution: Optional[str] = None
 
 
-# Auth Endpoints
 @app.post("/api/auth/register")
 async def register(user_data: UserCreate, session: Session = Depends(get_session)):
-    # Check if user exists
     existing_user = session.exec(
         select(User).where(User.username == user_data.username)
     ).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already registered")
-
     new_user = User(
         username=user_data.username,
         email=user_data.email,
@@ -174,7 +155,6 @@ async def login(
     user = session.exec(select(User).where(User.username == form_data.username)).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
-
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": user.username}, expires_delta=access_token_expires
@@ -206,7 +186,6 @@ async def update_me(
     if user_update.fullName is not None:
         current_user.fullName = user_update.fullName
     if user_update.email is not None:
-        # Check if email is already taken by ANOTHER user
         existing = session.exec(
             select(User)
             .where(User.email == user_update.email)
@@ -221,7 +200,6 @@ async def update_me(
         current_user.department = user_update.department
     if user_update.institution is not None:
         current_user.institution = user_update.institution
-
     session.add(current_user)
     session.commit()
     session.refresh(current_user)
@@ -260,21 +238,17 @@ async def process_mri(
 ):
     if not patientId:
         patientId = f"PT-2026-{uuid.uuid4().hex[:4].upper()}"
-
     if processor.detection_model is None or processor.classification_model is None:
         raise HTTPException(status_code=503, detail="AI models not loaded.")
-
     scan_id = f"scan-{uuid.uuid4().hex[:6]}"
     scan_dir = os.path.join(UPLOAD_DIR, scan_id)
     os.makedirs(scan_dir, exist_ok=True)
-
     saved_files = {}
     try:
         for file in files:
             file_path = os.path.join(scan_dir, file.filename)
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
-
             fname_upper = file.filename.upper()
             if "FLAIR" in fname_upper:
                 saved_files["flair"] = file_path
@@ -284,7 +258,6 @@ async def process_mri(
                 saved_files["t2"] = file_path
             elif "T1" in fname_upper:
                 saved_files["t1"] = file_path
-
         rep_file = next(
             (
                 saved_files.get(m)
@@ -295,13 +268,10 @@ async def process_mri(
         )
         if not rep_file:
             raise HTTPException(status_code=400, detail="No valid MRI modality found.")
-
-        # Inference
         image_2d = processor.nifti_to_2d(rep_file)
         prob_tumor = processor.run_detection(image_2d)
         has_tumor = prob_tumor > 0.5
         cls_result = processor.run_classification(image_2d)
-
         seg_result = {"tumorVolume": 0, "wtVolume": 0, "tcVolume": 0, "etVolume": 0}
         if len(saved_files) >= 4:
             try:
@@ -309,17 +279,14 @@ async def process_mri(
                 seg_result = processor.run_segmentation(saved_files, save_path=seg_path)
             except Exception as seg_err:
                 print(f"Segmentation error: {seg_err}")
-
-        # Save to DB
         new_scan = Scan(
             id=scan_id,
             patientId=patientId,
             patientName=patientName,
             scanDate=datetime.now().strftime("%Y-%m-%d"),
             modalities=[m.upper() for m in saved_files.keys()],
-            # Store relative paths to the files
             filePaths={
-                m: os.path.relpath(p, UPLOAD_DIR) for m, p in saved_files.items()
+                m: os.path.relpath(p, UPLOAD_DIR) for (m, p) in saved_files.items()
             },
             status="completed",
             progress=100,
@@ -331,8 +298,7 @@ async def process_mri(
                     cls_result["class"] if has_tumor else "No Tumour Detected"
                 ),
                 "confidence": round(
-                    float(cls_result["confidence"] if has_tumor else (1 - prob_tumor)),
-                    4,
+                    float(cls_result["confidence"] if has_tumor else 1 - prob_tumor), 4
                 ),
                 "tumorVolume": round(seg_result["tumorVolume"], 2),
                 "wtVolume": round(seg_result["wtVolume"], 2),
@@ -344,12 +310,10 @@ async def process_mri(
         session.commit()
         session.refresh(new_scan)
         return new_scan
-
     except Exception as e:
         import traceback
 
         traceback.print_exc()
-        # Clean up on failure
         if os.path.exists(scan_dir):
             shutil.rmtree(scan_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -366,21 +330,15 @@ async def get_scan_slice(
     scan = session.get(Scan, scan_id)
     if not scan or not scan.filePaths:
         raise HTTPException(status_code=404, detail="Scan or files not found")
-
     modality = modality.lower()
     if modality not in scan.filePaths:
-        # Fallback to first available modality
         modality = list(scan.filePaths.keys())[0]
-
     file_path = os.path.join(UPLOAD_DIR, scan.filePaths[modality])
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="MRI file not found on disk")
-
     image, total_slices = processor.get_slice_as_image(file_path, slice_idx)
     if image is None:
         raise HTTPException(status_code=500, detail="Failed to extract slice")
-
-    # Encode as JPEG
     _, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
     return Response(
         content=buffer.tobytes(),
@@ -399,23 +357,13 @@ async def get_segmentation_slice(
     scan = session.get(Scan, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
-
     seg_path = os.path.join(UPLOAD_DIR, scan_id, "segmentation.nii.gz")
     if not os.path.exists(seg_path):
-        # Return empty image or 404?
-        # Better to return 404 so frontend knows no mask exists
         raise HTTPException(status_code=404, detail="Segmentation not found")
-
     mask = processor.get_segmentation_slice(seg_path, slice_idx)
-
     if mask is None:
         raise HTTPException(status_code=500, detail="Failed to extract mask slice")
-
-    # mask is (H, W, 3) uint8 (R=WT, G=TC, B=ET)
-    # Encode as PNG to preserve values
-    # cv2 expects BGR
     mask_bgr = cv2.cvtColor(mask, cv2.COLOR_RGB2BGR)
-
     _, buffer = cv2.imencode(".png", mask_bgr)
     return Response(content=buffer.tobytes(), media_type="image/png")
 
@@ -430,11 +378,9 @@ async def update_scan(
     scan = session.get(Scan, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
-
     scan_data = scan_update.dict(exclude_unset=True)
     for key, value in scan_data.items():
         setattr(scan, key, value)
-
     session.add(scan)
     session.commit()
     session.refresh(scan)
@@ -450,12 +396,9 @@ async def delete_scan(
     scan = session.get(Scan, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
-
-    # Delete files
     scan_dir = os.path.join(UPLOAD_DIR, scan_id)
     if os.path.exists(scan_dir):
         shutil.rmtree(scan_dir, ignore_errors=True)
-
     session.delete(scan)
     session.commit()
     return {"message": "Scan deleted successfully"}
