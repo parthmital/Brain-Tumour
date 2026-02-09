@@ -14,7 +14,9 @@ from fastapi import (
     Depends,
     Body,
     Response,
+    Query,
 )
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlmodel import Session, select
@@ -32,7 +34,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 SECRET_KEY = "neuroscan-secret-key-change-this-in-production"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
 
 
 def verify_password(plain_password, hashed_password):
@@ -59,15 +61,20 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 
 
 async def get_current_user(
-    token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)
+    token: Optional[str] = Depends(oauth2_scheme),
+    token_query: Optional[str] = Query(None, alias="token"),
+    session: Session = Depends(get_session),
 ):
     credentials_exception = HTTPException(
         status_code=401,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    auth_token = token or token_query
+    if not auth_token:
+        raise credentials_exception
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(auth_token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
@@ -366,6 +373,43 @@ async def get_segmentation_slice(
     mask_bgr = cv2.cvtColor(mask, cv2.COLOR_RGB2BGR)
     _, buffer = cv2.imencode(".png", mask_bgr)
     return Response(content=buffer.tobytes(), media_type="image/png")
+
+
+@app.get("/api/scans/{scan_id}/download/{key}")
+async def download_scan_file(
+    scan_id: str,
+    key: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    scan = session.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    key = key.lower()
+    file_path = None
+
+    if key == "segmentation":
+        file_path = os.path.join(UPLOAD_DIR, scan_id, "segmentation.nii.gz")
+    elif scan.filePaths and key in scan.filePaths:
+        file_path = os.path.join(UPLOAD_DIR, scan.filePaths[key])
+    else:
+        # Try as direct filename within the scan folder for safety
+        potential_path = os.path.join(UPLOAD_DIR, scan_id, key)
+        # Prevent directory traversal
+        if os.path.commonpath(
+            [UPLOAD_DIR, potential_path]
+        ) == UPLOAD_DIR and os.path.exists(potential_path):
+            file_path = potential_path
+
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(
+        file_path,
+        media_type="application/octet-stream",
+        filename=os.path.basename(file_path),
+    )
 
 
 @app.put("/api/scans/{scan_id}", response_model=Scan)
