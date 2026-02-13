@@ -100,7 +100,7 @@ async def lifespan(app: FastAPI):
             base_dir, "Detection", "ResNet50-Binary-Detection.keras"
         )
         classification_path = os.path.join(
-            base_dir, "Classification", "Brain-Tumor-Classification-ResNet50.h5"
+            base_dir, "Classification", "Brain-Tumor-Classification-ResNet50.keras"
         )
         segmentation_path = os.path.join(
             base_dir, "Segmentation", "BraTS2020_nnU_Net_Segmentation.pth"

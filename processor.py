@@ -1,6 +1,5 @@
 import os
 import cv2
-import h5py
 import numpy as np
 import tensorflow as tf
 import torch
@@ -73,23 +72,17 @@ class BrainProcessor:
         self.segmentation_model = None
         self.classes = ["glioma", "meningioma", "notumor", "pituitary"]
 
-    def _rebuild_classification_model(self, num_classes: int = 4):
+    def _rebuild_classification_model(self):
+        # Rebuilding architecture to avoid "received 2 input tensors" error in .keras config
         base_model = tf.keras.applications.ResNet50(
-            weights="imagenet",
-            include_top=False,
-            input_shape=(224, 224, 3),
-            name="resnet50",
+            weights=None, include_top=False, input_shape=(224, 224, 3)
         )
         model = tf.keras.models.Sequential(
             [
                 base_model,
-                tf.keras.layers.GlobalAveragePooling2D(
-                    name="global_average_pooling2d_1"
-                ),
-                tf.keras.layers.Dropout(0.5, name="dropout_1"),
-                tf.keras.layers.Dense(
-                    num_classes, activation="softmax", name="dense_1"
-                ),
+                tf.keras.layers.GlobalAveragePooling2D(name="global_average_pooling2d"),
+                tf.keras.layers.Dropout(0.5, name="dropout"),
+                tf.keras.layers.Dense(4, activation="softmax", name="dense"),
             ]
         )
         return model
@@ -109,38 +102,9 @@ class BrainProcessor:
             raise e
         print(f"Loading Classification model from {classification_path}...")
         try:
-            self.classification_model = self._rebuild_classification_model(
-                num_classes=4
-            )
-            try:
-                with h5py.File(classification_path, "r") as f:
-                    gw = f["model_weights"]
-                    if "dense_1" in gw:
-                        weights = {}
-
-                        def collect_dense_weights(name, obj):
-                            if isinstance(obj, h5py.Dataset):
-                                if "dense_1" in name:
-                                    if "kernel" in name:
-                                        weights["kernel"] = np.array(obj)
-                                    if "bias" in name:
-                                        weights["bias"] = np.array(obj)
-
-                        gw["dense_1"].visititems(collect_dense_weights)
-                        if "kernel" in weights and "bias" in weights:
-                            self.classification_model.get_layer("dense_1").set_weights(
-                                [weights["kernel"], weights["bias"]]
-                            )
-                            print("Classification model head weights loaded manually.")
-                        else:
-                            print(
-                                "Warning: Could not find trained Dense weights in H5. Using random head."
-                            )
-                    else:
-                        print("Warning: 'dense_1' not found in H5. Using random head.")
-                print("Classification model (rebuilt + manual head) loaded.")
-            except Exception as e_h5:
-                print(f"Warning: Failed to load head weights manually: {e_h5}")
+            self.classification_model = self._rebuild_classification_model()
+            self.classification_model.load_weights(classification_path)
+            print("Classification model loaded successfully (rebuilt + weights).")
         except Exception as e:
             print(f"Error loading Classification model: {e}")
             traceback.print_exc()
