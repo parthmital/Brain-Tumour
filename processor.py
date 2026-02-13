@@ -243,7 +243,11 @@ class BrainProcessor:
                     ref_img = nib.load(modality_paths["flair"])
                     d, h, w = ref_img.shape
                     affine = ref_img.affine
-                    full_mask = np.zeros((3, d, h, w), dtype=np.float32)
+
+                    # Create a single 3D uint8 mask with discrete labels
+                    # Label 1: WT (Whole Tumor), Label 2: TC (Tumor Core), Label 3: ET (Enhancing Tumor)
+                    seg_mask = np.zeros((d, h, w), dtype=np.uint8)
+
                     start_d, start_h, start_w = (
                         (d - 128) // 2,
                         (h - 128) // 2,
@@ -252,13 +256,28 @@ class BrainProcessor:
                     d_dst = slice(max(0, start_d), min(d, start_d + 128))
                     h_dst = slice(max(0, start_h), min(h, start_h + 128))
                     w_dst = slice(max(0, start_w), min(w, start_w + 128))
+
                     d_src = slice(max(0, -start_d), min(128, d - start_d))
                     h_src = slice(max(0, -start_h), min(128, h - start_h))
                     w_src = slice(max(0, -start_w), min(128, w - start_w))
-                    full_mask[:, d_dst, h_dst, w_dst] = probs[:, d_src, h_src, w_src]
-                    full_mask_reshaped = np.moveaxis(full_mask, 0, -1)
-                    nib.save(nib.Nifti1Image(full_mask_reshaped, affine), save_path)
-                    print(f"Segmentation mask saved to {save_path}")
+
+                    # We map probabilities to discrete labels
+                    # More specific labels overwrite general ones
+                    local_wt = (probs[0, d_src, h_src, w_src] > 0.5).astype(np.uint8)
+                    local_tc = (probs[1, d_src, h_src, w_src] > 0.5).astype(np.uint8)
+                    local_et = (probs[2, d_src, h_src, w_src] > 0.5).astype(np.uint8)
+
+                    local_seg = np.zeros((128, 128, 128), dtype=np.uint8)
+                    local_seg[local_wt == 1] = 1
+                    local_seg[local_tc == 1] = 2
+                    local_seg[local_et == 1] = 3
+
+                    seg_mask[d_dst, h_dst, w_dst] = local_seg[d_src, h_src, w_src]
+
+                    # Save as uncompressed .nii for better compatibility and to rule out Gzip issues
+                    final_path = save_path.replace(".nii.gz", ".nii")
+                    nib.save(nib.Nifti1Image(seg_mask, affine), final_path)
+                    print(f"Segmentation mask saved to {final_path}")
                 except Exception as e:
                     print(f"Failed to save segmentation mask: {e}")
                     traceback.print_exc()
@@ -274,13 +293,31 @@ class BrainProcessor:
             if not os.path.exists(path):
                 return
             proxy = nib.load(path)
-            if len(proxy.shape) != 4 or proxy.shape[3] != 3:
+            # Now expecting (W, H, D) uint8
+            if len(proxy.shape) != 3:
                 print(f"Unexpected mask shape: {proxy.shape}")
                 return
-            slice_data = proxy.dataobj[:, :, slice_idx, :]
+            slice_data = proxy.dataobj[:, :, slice_idx]
             slice_data = np.array(slice_data)
-            slice_data = np.rot90(slice_data, 1, axes=(0, 1))
-            return (slice_data * 255).astype(np.uint8)
+            slice_data = np.rot90(slice_data, 1)
+
+            # Map labels to RGB for visualization in the 2D slice viewer.
+            # Verified against BraTS2020 notebook: WT=Ch0(R), TC=Ch1(G), ET=Ch2(B).
+            # Regions ET ⊂ TC ⊂ WT, so labels are mapped to all parent channels.
+            h, w = slice_data.shape
+            rgb_mask = np.zeros((h, w, 3), dtype=np.uint8)
+
+            # Label 1: WT (Whole Tumor)
+            rgb_mask[slice_data == 1, 0] = 255
+            # Label 2: TC (Tumor Core + WT)
+            rgb_mask[slice_data == 2, 0] = 255
+            rgb_mask[slice_data == 2, 1] = 255
+            # Label 3: ET (Enhancing Tumor + TC + WT)
+            rgb_mask[slice_data == 3, 0] = 255
+            rgb_mask[slice_data == 3, 1] = 255
+            rgb_mask[slice_data == 3, 2] = 255
+
+            return rgb_mask
         except Exception as e:
             print(f"Error in get_segmentation_slice: {e}")
             return

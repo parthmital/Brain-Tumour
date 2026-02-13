@@ -151,7 +151,23 @@ async def register(user_data: UserCreate, session: Session = Depends(get_session
     session.add(new_user)
     session.commit()
     session.refresh(new_user)
-    return {"message": "User created successfully"}
+
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": new_user.username}, expires_delta=access_token_expires
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": new_user.id,
+            "username": new_user.username,
+            "fullName": new_user.fullName,
+            "email": new_user.email,
+            "title": new_user.title,
+        },
+    }
 
 
 @app.post("/api/auth/login")
@@ -282,7 +298,7 @@ async def process_mri(
         seg_result = {"tumorVolume": 0, "wtVolume": 0, "tcVolume": 0, "etVolume": 0}
         if len(saved_files) >= 4:
             try:
-                seg_path = os.path.join(scan_dir, "segmentation.nii.gz")
+                seg_path = os.path.join(scan_dir, "segmentation.nii")
                 seg_result = processor.run_segmentation(saved_files, save_path=seg_path)
             except Exception as seg_err:
                 print(f"Segmentation error: {seg_err}")
@@ -364,7 +380,7 @@ async def get_segmentation_slice(
     scan = session.get(Scan, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
-    seg_path = os.path.join(UPLOAD_DIR, scan_id, "segmentation.nii.gz")
+    seg_path = os.path.join(UPLOAD_DIR, scan_id, "segmentation.nii")
     if not os.path.exists(seg_path):
         raise HTTPException(status_code=404, detail="Segmentation not found")
     mask = processor.get_segmentation_slice(seg_path, slice_idx)
@@ -390,7 +406,7 @@ async def download_scan_file(
     file_path = None
 
     if key == "segmentation":
-        file_path = os.path.join(UPLOAD_DIR, scan_id, "segmentation.nii.gz")
+        file_path = os.path.join(UPLOAD_DIR, scan_id, "segmentation.nii")
     elif scan.filePaths and key in scan.filePaths:
         file_path = os.path.join(UPLOAD_DIR, scan.filePaths[key])
     else:
